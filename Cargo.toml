@@ -1,0 +1,10 @@
+[package]
+name = "advent-of-code-2019"
+version = "0.1.0"
+authors = ["Tyler Horth"]
+edition = "2018"
+
+[dependencies]
+aoc-runner = "0.3.0"
+aoc-runner-derive = "0.3.0"
+nom = "5.0.1"
