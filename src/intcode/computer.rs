@@ -1,27 +1,34 @@
 use std::fmt::{Display, Formatter, Error, Debug};
 use std::convert::TryFrom;
 use crate::intcode::parser::{ParseError, read_program};
+use dialoguer::theme::CustomPromptCharacterTheme;
+use dialoguer::Input;
 
 pub struct Computer {
     memory: Vec<i64>,
-    pc: usize
+    pc: usize,
+    theme: CustomPromptCharacterTheme
 }
 
 pub enum RuntimeError {
-    EndOfInstructions,
     OutOfBounds(i64),
-    UnrecognizedOpcode(i64),
+    UnrecognizedOpcode([u8; 4]),
+    UnrecognizedParameterMode(u8),
+    InputError
 }
 
 impl Display for RuntimeError {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
         match self {
-            RuntimeError::EndOfInstructions=>
-                write!(f, "End of instructions reached"),
             RuntimeError::OutOfBounds(address) =>
                 write!(f, "Attempted to access out of bounds memory {}", address),
             RuntimeError::UnrecognizedOpcode(opcode) =>
-                write!(f, "Unrecognized opcode {}", opcode)
+                write!(f, "Unrecognized opcode {}, with parameter modes {}, {}, {}",
+                       opcode[0], opcode[1], opcode[2], opcode[3]),
+            RuntimeError::UnrecognizedParameterMode(mode) =>
+                write!(f, "Unrecognized parameter mode {}", mode),
+            RuntimeError::InputError =>
+                write!(f, "Error reading input"),
         }
     }
 }
@@ -35,87 +42,159 @@ impl Debug for RuntimeError {
 impl Computer {
     pub fn load(program: &str) -> Result<Computer, ParseError> {
         let memory = read_program(program)?;
+        let pc = 0;
+        let theme = CustomPromptCharacterTheme::new('>');
         let computer = Computer {
             memory,
-            pc: 0
+            pc,
+            theme
         };
 
         Ok(computer)
     }
 
-    pub fn set(&mut self, address: i64, value: i64) -> Result<(), RuntimeError> {
+    fn to_address(&self, address: i64) -> Result<usize, RuntimeError> {
         let address = usize::try_from(address)
             .map_err(|_| RuntimeError::OutOfBounds(address))?;
 
         if address >= self.memory.len() {
             Err(RuntimeError::OutOfBounds(address as i64))
         } else {
-            self.memory[address] = value;
-            Ok(())
+            Ok(address)
         }
+    }
+
+    pub fn set(&mut self, address: i64, value: i64) -> Result<(), RuntimeError> {
+        let address = self.to_address(address)?;
+        self.memory[address] = value;
+        Ok(())
     }
 
     pub fn get(&self, address: i64) -> Result<i64, RuntimeError> {
-        let address = usize::try_from(address)
-            .map_err(|_| RuntimeError::OutOfBounds(address))?;
-
-        if address >= self.memory.len() {
-            Err(RuntimeError::OutOfBounds(address as i64))
-        } else {
-            Ok(self.memory[address])
-        }
+        let address = self.to_address(address)?;
+        Ok(self.memory[address])
     }
 
-    fn read3(&mut self) -> Result<(i64, i64, i64), RuntimeError> {
-        if self.pc + 3 >= self.memory.len() {
-            return Err(RuntimeError::OutOfBounds(self.pc as i64 + 3))
+    fn opcode(&mut self) -> Result<[u8; 4], RuntimeError> {
+        let mut int = self.read_im()?;
+
+        let opcode = int % 100;
+        int /= 100;
+
+        let mut result = [opcode as u8, 0, 0, 0];
+        for i in 1..=3 {
+            if int == 0 {
+                break
+            }
+
+            result[i] = (int % 10) as u8;
+            int /= 10;
         }
 
-        Ok((
-            self.memory[self.pc + 1],
-            self.memory[self.pc + 2],
-            self.memory[self.pc + 3]
-        ))
+        Ok(result)
     }
 
-    fn step(&mut self) -> Result<bool, RuntimeError> {
-        if self.pc >= self.memory.len() {
-            return Err(RuntimeError::EndOfInstructions)
-        }
+    fn read_pos(&mut self) -> Result<i64, RuntimeError> {
+        let int = self.read_im()?;
+        self.get(int)
+    }
 
-        match self.memory[self.pc] {
-            1 => { // Add
-                let (first, second, result) = self.read3()?;
+    fn read_im(&mut self) -> Result<i64, RuntimeError> {
+        let int = self.memory
+            .get(self.pc)
+            .ok_or(RuntimeError::OutOfBounds(self.pc as i64))?
+            .clone();
 
-                self.set(
-                    result,
-                    self.get(first)? + self.get(second)?
-                )?;
-                self.pc += 4;
+        self.pc += 1;
 
-                Ok(true)
-            },
-            2 => { // Multiply
-                let (first, second, result) = self.read3()?;
+        Ok(int)
+    }
 
-                self.set(
-                    result,
-                    self.get(first)? * self.get(second)?
-                )?;
-                self.pc += 4;
-
-                Ok(true)
-            },
-            99 => { // Finish
-                self.pc = self.memory.len();
-                Ok(false)
-            },
-            opcode => Err(RuntimeError::UnrecognizedOpcode(opcode))
+    fn read(&mut self, mode: u8) -> Result<i64, RuntimeError> {
+        match mode {
+            0 => self.read_pos(),
+            1 => self.read_im(),
+            m => Err(RuntimeError::UnrecognizedParameterMode(m))
         }
     }
 
     pub fn run(&mut self) -> Result<(), RuntimeError> {
-        while self.step()? {}
+        while self.pc < self.memory.len() {
+            match self.opcode()? {
+                // Add
+                [1, a, b, 0] => {
+                    let first = self.read(a)?;
+                    let second = self.read(b)?;
+                    let result = self.read_im()?;
+
+                    self.set(result, first + second)?;
+                },
+                // Multiply
+                [2, a, b, 0] => {
+                    let first = self.read(a)?;
+                    let second = self.read(b)?;
+                    let result = self.read_im()?;
+
+                    self.set(result, first * second)?;
+                },
+                // Input
+                [3, 0, 0, 0] => {
+                    let result = self.read_im()?;
+                    let input = Input::<i64>::with_theme(&self.theme)
+                        .interact()
+                        .map_err(|_| RuntimeError::InputError)?;
+
+                    self.set(result, input)?;
+                }
+                // Output
+                [4, a, 0, 0] => {
+                    let value = self.read(a)?;
+                    println!("{}", value);
+                }
+                // Jump-if-true
+                [5, a, b, 0] => {
+                    let condition = self.read(a)?;
+                    let address = self.read(b)?;
+
+                    if condition != 0 {
+                        self.pc = self.to_address(address)?;
+                    }
+                }
+                // Jump-if-false
+                [6, a, b, 0] => {
+                    let condition = self.read(a)?;
+                    let address = self.read(b)?;
+
+                    if condition == 0 {
+                        self.pc = self.to_address(address)?;
+                    }
+                }
+                // Less than
+                [7, a, b, 0] => {
+                    let first = self.read(a)?;
+                    let second = self.read(b)?;
+                    let result = self.read_im()?;
+
+                    self.set(result, if first < second { 1 } else { 0 })?;
+                }
+                // equals
+                [8, a, b, 0] => {
+                    let first = self.read(a)?;
+                    let second = self.read(b)?;
+                    let result = self.read_im()?;
+
+                    self.set(result, if first == second { 1 } else { 0 })?;
+                }
+                // Exit
+                [99, 0, 0, 0] => {
+                    self.pc = self.memory.len();
+                },
+                opcode => {
+                    return Err(RuntimeError::UnrecognizedOpcode(opcode));
+                }
+            }
+        }
+
         Ok(())
     }
 }

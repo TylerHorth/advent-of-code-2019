@@ -1,17 +1,16 @@
 use nom::{Err, IResult};
-use nom::bytes::complete::tag;
-use nom::character::complete::{digit1, line_ending};
-use nom::combinator::{all_consuming, map_res, opt};
+use nom::character::complete::{digit1, line_ending, char};
+use nom::combinator::{all_consuming, map_res, opt, recognize};
 use nom::error::ErrorKind;
 use nom::multi::separated_list;
 use nom::sequence::tuple;
 
 fn int(input: &str) -> IResult<&str, i64> {
-    map_res(digit1, str::parse)(input)
+    map_res(recognize(tuple((opt(char('-')), digit1))), str::parse)(input)
 }
 
 fn ints(input: &str) -> IResult<&str, Vec<i64>> {
-    separated_list(tag(","), int)(input)
+    separated_list(char(','), int)(input)
 }
 
 pub type ParseError<'a> = Err<(&'a str, ErrorKind)>;
