@@ -18,16 +18,47 @@ fn parse_map(map: &str) -> HashMap<String, String> {
         .collect()
 }
 
+fn height<'a>(of: &'a str, map: &'a HashMap<String, String>, dp: &mut HashMap<&'a str, u32>) -> u32 {
+    if dp.contains_key(of) {
+        dp[of]
+    } else {
+        let parent = &map[of];
+        let height = height(parent, map, dp) + 1;
+
+        dp.insert(of, height);
+
+        height
+    }
+}
+
 #[aoc(day6, part1)]
-fn count_orbits(map: &HashMap<String, String>) -> u32 {
+fn num_orbits(map: &HashMap<String, String>) -> u32 {
+    let dp = &mut HashMap::new();
+    dp.insert("COM", 1);
+
     let mut count = 0;
-    for mut value in map.values() {
-        count += 1;
-        while value != "COM" {
-            count += 1;
-            value = &map[value];
-        }
+    for value in map.values() {
+        count += height(value, map, dp);
     }
 
     count
+}
+
+#[aoc(day6, part2)]
+fn transfers_required(map: &HashMap<String, String>) -> u32 {
+    let dp = &mut HashMap::new();
+    dp.insert("COM", 1);
+
+    let santa_count = height("SAN", map, dp);
+
+    let mut you: &str = &map["YOU"];
+    let mut count = 0;
+    while !dp.contains_key(you) {
+        you = &map[you];
+        count += 1;
+    }
+
+    let lca = dp[you];
+
+    santa_count - lca + count - 1
 }
