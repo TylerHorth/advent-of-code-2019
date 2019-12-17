@@ -3,18 +3,22 @@ use std::convert::TryFrom;
 use crate::intcode::parser::{ParseError, read_program};
 use dialoguer::theme::CustomPromptCharacterTheme;
 use dialoguer::Input;
+use std::sync::mpsc::{Receiver, Sender};
 
 pub struct Computer {
     memory: Vec<i64>,
     pc: usize,
-    theme: CustomPromptCharacterTheme
+    theme: CustomPromptCharacterTheme,
+    input: Option<Receiver<i64>>,
+    output: Option<Sender<i64>>
 }
 
 pub enum RuntimeError {
     OutOfBounds(i64),
     UnrecognizedOpcode([u8; 4]),
     UnrecognizedParameterMode(u8),
-    InputError
+    InputError,
+    OutputError
 }
 
 impl Display for RuntimeError {
@@ -29,6 +33,8 @@ impl Display for RuntimeError {
                 write!(f, "Unrecognized parameter mode {}", mode),
             RuntimeError::InputError =>
                 write!(f, "Error reading input"),
+            RuntimeError::OutputError =>
+                write!(f, "Error writing output"),
         }
     }
 }
@@ -47,10 +53,20 @@ impl Computer {
         let computer = Computer {
             memory,
             pc,
-            theme
+            theme,
+            input: None,
+            output: None
         };
 
         Ok(computer)
+    }
+
+    pub fn set_input(&mut self, receiver: Receiver<i64>) {
+        self.input = Some(receiver);
+    }
+
+    pub fn set_output(&mut self, sender: Sender<i64>) {
+        self.output = Some(sender);
     }
 
     fn to_address(&self, address: i64) -> Result<usize, RuntimeError> {
@@ -140,16 +156,26 @@ impl Computer {
                 // Input
                 [3, 0, 0, 0] => {
                     let result = self.read_im()?;
-                    let input = Input::<i64>::with_theme(&self.theme)
-                        .interact()
-                        .map_err(|_| RuntimeError::InputError)?;
+                    let input = if let Some(receiver) = &self.input {
+                        receiver.recv()
+                            .map_err(|_| RuntimeError::InputError)?
+                    } else {
+                        Input::<i64>::with_theme(&self.theme)
+                            .interact()
+                            .map_err(|_| RuntimeError::InputError)?
+                    };
 
                     self.set(result, input)?;
                 }
                 // Output
                 [4, a, 0, 0] => {
                     let value = self.read(a)?;
-                    println!("{}", value);
+                    if let Some(sender) = &self.output {
+                        sender.send(value)
+                            .map_err(|_| RuntimeError::OutputError)?;
+                    } else {
+                        println!("{}", value);
+                    }
                 }
                 // Jump-if-true
                 [5, a, b, 0] => {
