@@ -68,6 +68,14 @@ impl Computer {
     pub fn set_output(&mut self, sender: Sender<i64>) {
         self.output = Some(sender);
     }
+    
+    pub fn clone_output(&self) -> Option<Sender<i64>> {
+        self.output.clone()
+    }
+
+    pub fn take_input(&mut self) -> Option<Receiver<i64>> {
+        self.input.take()
+    }
 
     fn to_address(&self, address: i64) -> Result<usize, RuntimeError> {
         let address = usize::try_from(address)

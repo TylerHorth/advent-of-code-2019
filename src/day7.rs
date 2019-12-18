@@ -3,35 +3,57 @@ use crate::intcode::computer::Computer;
 use itertools::Itertools;
 use std::sync::mpsc::channel;
 use std::iter::repeat_with;
+use std::thread;
+use std::thread::JoinHandle;
 
-#[aoc(day7, part1)]
-fn max_signal_sequence(program: &str) -> i64 {
-    (0..=4).permutations(5)
+const NUM_COMPUTERS: usize = 5;
+
+fn max_signal(program: &str, phases: impl Iterator<Item=i64>) -> i64 {
+    phases.permutations(NUM_COMPUTERS)
         .map(|phases| {
-            let computers = repeat_with(||
-                Computer::load(program).unwrap()
-            ).take(5);
+            let mut computers = repeat_with(|| Computer::load(program).unwrap())
+                .take(NUM_COMPUTERS)
+                .collect_vec();
 
-            let mut in_out = channel();
-            in_out.0.send(phases[0]).unwrap();
-            in_out.0.send(0).unwrap();
+            for i in 0..NUM_COMPUTERS {
+                let (sender, receiver) = channel();
 
-            for (i, mut computer) in computers.enumerate() {
-                computer.set_input(in_out.1);
+                sender.send(phases[i]).unwrap();
 
-                in_out = channel();
-
-                if i < 4 {
-                    in_out.0.send(phases[i + 1]).unwrap();
-                }
-
-                computer.set_output(in_out.0);
-
-                computer.run().unwrap();
+                computers[i].set_output(sender);
+                computers[(i + 1) % NUM_COMPUTERS].set_input(receiver);
             }
 
-            in_out.1.recv().unwrap()
+            computers
+                .last().unwrap()
+                .clone_output().unwrap()
+                .send(0).unwrap();
+
+            let inputs = computers.into_iter()
+                .map(|mut computer| thread::spawn(move || {
+                    computer.run().unwrap();
+                    computer.take_input().unwrap()
+                }))
+                .collect_vec()
+                .into_iter()
+                .map(JoinHandle::join)
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+
+            inputs
+                .first().unwrap()
+                .recv().unwrap()
         })
         .max()
         .unwrap()
+}
+
+#[aoc(day7, part1)]
+fn max_signal_sequence(program: &str) -> i64 {
+    max_signal(program, 0..=4)
+}
+
+#[aoc(day7, part2)]
+fn max_signal_loop(program: &str) -> i64 {
+    max_signal(program, 5..=9)
 }
