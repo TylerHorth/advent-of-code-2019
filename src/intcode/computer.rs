@@ -8,6 +8,7 @@ use std::sync::mpsc::{Receiver, Sender};
 pub struct Computer {
     memory: Vec<i64>,
     pc: usize,
+    rb: usize,
     theme: CustomPromptCharacterTheme,
     input: Option<Receiver<i64>>,
     output: Option<Sender<i64>>
@@ -49,10 +50,12 @@ impl Computer {
     pub fn load(program: &str) -> Result<Computer, ParseError> {
         let memory = read_program(program)?;
         let pc = 0;
+        let rb = 0;
         let theme = CustomPromptCharacterTheme::new('>');
         let computer = Computer {
             memory,
             pc,
+            rb,
             theme,
             input: None,
             output: None
@@ -68,7 +71,7 @@ impl Computer {
     pub fn set_output(&mut self, sender: Sender<i64>) {
         self.output = Some(sender);
     }
-    
+
     pub fn clone_output(&self) -> Option<Sender<i64>> {
         self.output.clone()
     }
@@ -78,24 +81,26 @@ impl Computer {
     }
 
     fn to_address(&self, address: i64) -> Result<usize, RuntimeError> {
-        let address = usize::try_from(address)
-            .map_err(|_| RuntimeError::OutOfBounds(address))?;
+        usize::try_from(address)
+            .map_err(|_| RuntimeError::OutOfBounds(address))
+    }
 
-        if address >= self.memory.len() {
-            Err(RuntimeError::OutOfBounds(address as i64))
-        } else {
-            Ok(address)
+    fn extend(&mut self, address: usize) {
+        if self.memory.len() <= address {
+            self.memory.resize(address + 1, 0);
         }
     }
 
     pub fn set(&mut self, address: i64, value: i64) -> Result<(), RuntimeError> {
         let address = self.to_address(address)?;
+        self.extend(address);
         self.memory[address] = value;
         Ok(())
     }
 
-    pub fn get(&self, address: i64) -> Result<i64, RuntimeError> {
+    pub fn get(&mut self, address: i64) -> Result<i64, RuntimeError> {
         let address = self.to_address(address)?;
+        self.extend(address);
         Ok(self.memory[address])
     }
 
@@ -119,51 +124,70 @@ impl Computer {
     }
 
     fn read_pos(&mut self) -> Result<i64, RuntimeError> {
-        let int = self.read_im()?;
-        self.get(int)
+        let address = self.read_im()?;
+        self.get(address)
     }
 
     fn read_im(&mut self) -> Result<i64, RuntimeError> {
-        let int = self.memory
-            .get(self.pc)
-            .ok_or(RuntimeError::OutOfBounds(self.pc as i64))?
-            .clone();
+        self.extend(self.pc);
+        let int = self.memory[self.pc];
 
         self.pc += 1;
 
         Ok(int)
     }
 
+    fn read_rel(&mut self) -> Result<i64, RuntimeError> {
+        let offset = self.read_im()?;
+        self.get(self.rb as i64 + offset)
+    }
+
     fn read(&mut self, mode: u8) -> Result<i64, RuntimeError> {
         match mode {
             0 => self.read_pos(),
             1 => self.read_im(),
+            2 => self.read_rel(),
+            m => Err(RuntimeError::UnrecognizedParameterMode(m))
+        }
+    }
+
+    fn write_pos(&mut self, value: i64) -> Result<(), RuntimeError> {
+        let address = self.read_im()?;
+        self.set(address, value)
+    }
+
+    fn write_rel(&mut self, value: i64) -> Result<(), RuntimeError> {
+        let offset = self.read_im()?;
+        self.set(self.rb as i64 + offset, value)
+    }
+
+    fn write(&mut self, mode: u8, value: i64) -> Result<(), RuntimeError> {
+        match mode {
+            0 => self.write_pos(value),
+            2 => self.write_rel(value),
             m => Err(RuntimeError::UnrecognizedParameterMode(m))
         }
     }
 
     pub fn run(&mut self) -> Result<(), RuntimeError> {
-        while self.pc < self.memory.len() {
+        loop {
             match self.opcode()? {
                 // Add
-                [1, a, b, 0] => {
+                [1, a, b, r] => {
                     let first = self.read(a)?;
                     let second = self.read(b)?;
-                    let result = self.read_im()?;
 
-                    self.set(result, first + second)?;
+                    self.write(r, first + second)?;
                 },
                 // Multiply
-                [2, a, b, 0] => {
+                [2, a, b, r] => {
                     let first = self.read(a)?;
                     let second = self.read(b)?;
-                    let result = self.read_im()?;
 
-                    self.set(result, first * second)?;
+                    self.write(r, first * second)?;
                 },
                 // Input
-                [3, 0, 0, 0] => {
-                    let result = self.read_im()?;
+                [3, r, 0, 0] => {
                     let input = if let Some(receiver) = &self.input {
                         receiver.recv()
                             .map_err(|_| RuntimeError::InputError)?
@@ -173,7 +197,7 @@ impl Computer {
                             .map_err(|_| RuntimeError::InputError)?
                     };
 
-                    self.set(result, input)?;
+                    self.write(r, input)?;
                 }
                 // Output
                 [4, a, 0, 0] => {
@@ -204,32 +228,33 @@ impl Computer {
                     }
                 }
                 // Less than
-                [7, a, b, 0] => {
+                [7, a, b, r] => {
                     let first = self.read(a)?;
                     let second = self.read(b)?;
-                    let result = self.read_im()?;
 
-                    self.set(result, if first < second { 1 } else { 0 })?;
+                    self.write(r, if first < second { 1 } else { 0 })?;
                 }
                 // equals
-                [8, a, b, 0] => {
+                [8, a, b, r] => {
                     let first = self.read(a)?;
                     let second = self.read(b)?;
-                    let result = self.read_im()?;
 
-                    self.set(result, if first == second { 1 } else { 0 })?;
+                    self.write(r, if first == second { 1 } else { 0 })?;
                 }
+                // Relative base offset
+                [9, a, 0, 0] => {
+                    let offset = self.read(a)?;
+                    self.rb = self.to_address(self.rb as i64 + offset)?;
+                },
                 // Exit
                 [99, 0, 0, 0] => {
-                    self.pc = self.memory.len();
+                    return Ok(())
                 },
                 opcode => {
                     return Err(RuntimeError::UnrecognizedOpcode(opcode));
                 }
             }
         }
-
-        Ok(())
     }
 }
 
