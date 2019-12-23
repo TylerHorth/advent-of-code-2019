@@ -1,58 +1,117 @@
-use aoc_runner_derive::aoc;
+use aoc_runner_derive::{aoc, aoc_generator};
 use itertools::Itertools;
+use nom::bytes::complete::tag;
+use nom::character::complete::{char, digit1, line_ending};
+use nom::combinator::{map_res, recognize, opt, map};
+use nom::multi::separated_list;
+use nom::sequence::tuple;
+use nom::IResult;
+use num::integer::lcm;
 
-struct Moon {
-    pos: [i64; 3],
-    vel: [i64; 3]
+fn int(input: &str) -> IResult<&str, i64> {
+    map_res(recognize(tuple((opt(char('-')), digit1))), str::parse)(input)
 }
 
-impl Moon {
-    fn new(x: i64, y: i64, z: i64) -> Moon {
-        Moon {
-            pos: [x, y, z],
-            vel: [0, 0, 0]
+fn pos(axis: char) -> impl Fn(&str) -> IResult<&str, i64> {
+    move |input| {
+        map(tuple((char(axis), char('='), int)), |r| r.2)(input)
+    }
+}
+
+fn position(input: &str) -> IResult<&str, [i64; 3]> {
+    let (input, (_, x, _, y, _, z, _)) = tuple((
+        char('<'),
+        pos('x'),
+        tag(", "),
+        pos('y'),
+        tag(", "),
+        pos('z'),
+        char('>'),
+    ))(input)?;
+
+    Ok((input, [x, y, z]))
+}
+
+#[aoc_generator(day12)]
+fn parse_positions(input: &str) -> Vec<[i64; 3]> {
+    separated_list(line_ending, position)(input).unwrap().1
+}
+
+fn states_from(positions: &Vec<[i64; 3]>) -> [Vec<(i64, i64)>; 3] {
+    let mut res = [
+        Vec::with_capacity(positions.len()),
+        Vec::with_capacity(positions.len()),
+        Vec::with_capacity(positions.len())
+    ];
+
+    for position in positions {
+        for i in 0..3 {
+            res[i].push((position[i], 0));
         }
+    }
+
+    res
+}
+
+fn step(state: &mut Vec<(i64, i64)>) {
+    for (i, j) in (0..state.len()).tuple_combinations() {
+        if state[i].0 < state[j].0 {
+            state[i].1 += 1;
+            state[j].1 -= 1;
+        }
+
+        if state[i].0 > state[j].0 {
+            state[i].1 -= 1;
+            state[j].1 += 1;
+        }
+    }
+
+    for moon in state {
+        moon.0 += moon.1;
     }
 }
 
 #[aoc(day12, part1)]
-fn total_energy(_input: &str) -> i64 {
-    let mut moons = [
-        Moon::new(-15, 1, 4),
-        Moon::new(1, -10, -8),
-        Moon::new(-5, 4, 9),
-        Moon::new(4, 6, -2),
-    ];
+fn total_energy(positions: &Vec<[i64; 3]>) -> i64 {
+    let mut states = states_from(positions);
 
-    for _ in 0..1000 {
-        for (i, j) in (0..moons.len()).tuple_combinations() {
-            for p in 0..3 {
-                if moons[i].pos[p] < moons[j].pos[p] {
-                    moons[i].vel[p] += 1;
-                    moons[j].vel[p] -= 1;
-                }
-
-                if moons[i].pos[p] > moons[j].pos[p] {
-                    moons[i].vel[p] -= 1;
-                    moons[j].vel[p] += 1;
-                }
-            }
-        }
-
-        for moon in &mut moons {
-            for i in 0..3 {
-                let vel = moon.vel[i];
-                moon.pos[i] += vel;
-            }
+    for i in 0..3 {
+        for _ in 0..1000 {
+            step(&mut states[i]);
         }
     }
 
-    moons.iter()
-        .map(|m| {
-            let potential: i64 = m.pos.iter().cloned().map(i64::abs).sum();
-            let kinetic: i64 = m.vel.iter().cloned().map(i64::abs).sum();
+    (0..positions.len()).map(|i| {
+        let (pot, kin) = states.iter()
+            .map(|state| state[i])
+            .map(|(a, b)| (a.abs(), b.abs()))
+            .fold((0, 0), |(a, b), (c, d)| (a + c, b + d));
 
-            potential * kinetic
-        })
-        .sum()
+        pot * kin
+    }).sum()
+}
+
+fn calc_period(start: &Vec<(i64, i64)>) -> u64 {
+    let mut count = 0;
+    let state = &mut start.clone();
+
+    loop {
+        step(state);
+
+        count += 1;
+
+        if state == start {
+            return count;
+        }
+    }
+}
+
+#[aoc(day12, part2)]
+fn find_period(positions: &Vec<[i64; 3]>) -> u64 {
+    let states = states_from(positions);
+
+    lcm(
+        calc_period(&states[0]),
+        lcm(calc_period(&states[1]), calc_period(&states[2])),
+    )
 }
