@@ -14,6 +14,7 @@ pub struct Computer {
     output: Option<Sender<i64>>,
 }
 
+#[derive(Eq, PartialEq)]
 pub enum RuntimeError {
     OutOfBounds(i64),
     UnrecognizedOpcode([u8; 4]),
