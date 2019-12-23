@@ -1,17 +1,17 @@
-use std::fmt::{Display, Formatter, Error, Debug};
+use crate::intcode::parser::{read_program, ParseError};
+use crossterm::style::Print;
+use crossterm::ExecutableCommand;
 use std::convert::TryFrom;
-use crate::intcode::parser::{ParseError, read_program};
-use dialoguer::theme::CustomPromptCharacterTheme;
-use dialoguer::Input;
+use std::fmt::{Debug, Display, Error, Formatter};
+use std::io::{stderr, stdin};
 use std::sync::mpsc::{Receiver, Sender};
 
 pub struct Computer {
     memory: Vec<i64>,
     pc: usize,
     rb: usize,
-    theme: CustomPromptCharacterTheme,
     input: Option<Receiver<i64>>,
-    output: Option<Sender<i64>>
+    output: Option<Sender<i64>>,
 }
 
 pub enum RuntimeError {
@@ -19,23 +19,25 @@ pub enum RuntimeError {
     UnrecognizedOpcode([u8; 4]),
     UnrecognizedParameterMode(u8),
     InputError,
-    OutputError
+    OutputError,
 }
 
 impl Display for RuntimeError {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
         match self {
-            RuntimeError::OutOfBounds(address) =>
-                write!(f, "Attempted to access out of bounds memory {}", address),
-            RuntimeError::UnrecognizedOpcode(opcode) =>
-                write!(f, "Unrecognized opcode {}, with parameter modes {}, {}, {}",
-                       opcode[0], opcode[1], opcode[2], opcode[3]),
-            RuntimeError::UnrecognizedParameterMode(mode) =>
-                write!(f, "Unrecognized parameter mode {}", mode),
-            RuntimeError::InputError =>
-                write!(f, "Error reading input"),
-            RuntimeError::OutputError =>
-                write!(f, "Error writing output"),
+            RuntimeError::OutOfBounds(address) => {
+                write!(f, "Attempted to access out of bounds memory {}", address)
+            }
+            RuntimeError::UnrecognizedOpcode(opcode) => write!(
+                f,
+                "Unrecognized opcode {}, with parameter modes {}, {}, {}",
+                opcode[0], opcode[1], opcode[2], opcode[3]
+            ),
+            RuntimeError::UnrecognizedParameterMode(mode) => {
+                write!(f, "Unrecognized parameter mode {}", mode)
+            }
+            RuntimeError::InputError => write!(f, "Error reading input"),
+            RuntimeError::OutputError => write!(f, "Error writing output"),
         }
     }
 }
@@ -51,14 +53,12 @@ impl Computer {
         let memory = read_program(program)?;
         let pc = 0;
         let rb = 0;
-        let theme = CustomPromptCharacterTheme::new('>');
         let computer = Computer {
             memory,
             pc,
             rb,
-            theme,
             input: None,
-            output: None
+            output: None,
         };
 
         Ok(computer)
@@ -81,8 +81,7 @@ impl Computer {
     }
 
     fn to_address(&self, address: i64) -> Result<usize, RuntimeError> {
-        usize::try_from(address)
-            .map_err(|_| RuntimeError::OutOfBounds(address))
+        usize::try_from(address).map_err(|_| RuntimeError::OutOfBounds(address))
     }
 
     fn extend(&mut self, address: usize) {
@@ -113,7 +112,7 @@ impl Computer {
         let mut result = [opcode as u8, 0, 0, 0];
         for i in 1..=3 {
             if int == 0 {
-                break
+                break;
             }
 
             result[i] = (int % 10) as u8;
@@ -147,7 +146,7 @@ impl Computer {
             0 => self.read_pos(),
             1 => self.read_im(),
             2 => self.read_rel(),
-            m => Err(RuntimeError::UnrecognizedParameterMode(m))
+            m => Err(RuntimeError::UnrecognizedParameterMode(m)),
         }
     }
 
@@ -165,7 +164,7 @@ impl Computer {
         match mode {
             0 => self.write_pos(value),
             2 => self.write_rel(value),
-            m => Err(RuntimeError::UnrecognizedParameterMode(m))
+            m => Err(RuntimeError::UnrecognizedParameterMode(m)),
         }
     }
 
@@ -178,23 +177,29 @@ impl Computer {
                     let second = self.read(b)?;
 
                     self.write(r, first + second)?;
-                },
+                }
                 // Multiply
                 [2, a, b, r] => {
                     let first = self.read(a)?;
                     let second = self.read(b)?;
 
                     self.write(r, first * second)?;
-                },
+                }
                 // Input
                 [3, r, 0, 0] => {
                     let input = if let Some(receiver) = &self.input {
-                        receiver.recv()
-                            .map_err(|_| RuntimeError::InputError)?
+                        receiver.recv().map_err(|_| RuntimeError::InputError)?
                     } else {
-                        Input::<i64>::with_theme(&self.theme)
-                            .interact()
-                            .map_err(|_| RuntimeError::InputError)?
+                        stderr()
+                            .execute(Print("> "))
+                            .map_err(|_| RuntimeError::InputError)?;
+
+                        let mut input = String::new();
+                        stdin()
+                            .read_line(&mut input)
+                            .map_err(|_| RuntimeError::InputError)?;
+
+                        input.trim().parse().map_err(|_| RuntimeError::InputError)?
                     };
 
                     self.write(r, input)?;
@@ -203,8 +208,7 @@ impl Computer {
                 [4, a, 0, 0] => {
                     let value = self.read(a)?;
                     if let Some(sender) = &self.output {
-                        sender.send(value)
-                            .map_err(|_| RuntimeError::OutputError)?;
+                        sender.send(value).map_err(|_| RuntimeError::OutputError)?;
                     } else {
                         println!("{}", value);
                     }
@@ -245,11 +249,9 @@ impl Computer {
                 [9, a, 0, 0] => {
                     let offset = self.read(a)?;
                     self.rb = self.to_address(self.rb as i64 + offset)?;
-                },
+                }
                 // Exit
-                [99, 0, 0, 0] => {
-                    return Ok(())
-                },
+                [99, 0, 0, 0] => return Ok(()),
                 opcode => {
                     return Err(RuntimeError::UnrecognizedOpcode(opcode));
                 }
@@ -257,4 +259,3 @@ impl Computer {
         }
     }
 }
-
